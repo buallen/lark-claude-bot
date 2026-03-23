@@ -1,14 +1,31 @@
 'use strict';
 
+// Load .env if present
+const path = require('path');
+const fs = require('fs');
+const envPath = path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+  fs.readFileSync(envPath, 'utf8').split('\n').forEach(line => {
+    const m = line.match(/^([^#=]+)=(.*)$/);
+    if (m) process.env[m[1].trim()] = m[2].trim();
+  });
+}
+
 const lark = require('@larksuiteoapi/node-sdk');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const APP_ID = 'cli_a8aeebc94cfa1010';
-const APP_SECRET = 'OvT4neSAlk6mDMDcCB1YBdnD1MMyRZQn';
-const DEFAULT_WORKDIR = '/Users/kan.lu/Documents/GitHub';
+const APP_ID = process.env.LARK_APP_ID;
+const APP_SECRET = process.env.LARK_APP_SECRET;
+const DEFAULT_WORKDIR = process.env.WORKDIR || '/Users/kan.lu/Documents/GitHub';
+
+if (!APP_ID || !APP_SECRET) {
+  console.error('❌ Missing LARK_APP_ID or LARK_APP_SECRET environment variables.');
+  console.error('   Set them in .env or export before running.');
+  process.exit(1);
+}
 
 // Resolve node + claude cli.js from nvm (works under launchd where nvm not in PATH)
 const NVM_NODE = (() => {
