@@ -154,8 +154,8 @@ function runClaude(prompt, workdir, sessionId) {
 
     const timer = setTimeout(() => {
       proc.kill('SIGTERM');
-      reject(new Error('Timed out after 10 minutes'));
-    }, 10 * 60 * 1000);
+      reject(new Error('Timed out after 20 minutes'));
+    }, 20 * 60 * 1000);
 
     proc.on('close', code => {
       clearTimeout(timer);
