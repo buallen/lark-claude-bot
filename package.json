@@ -1,0 +1,12 @@
+{
+  "name": "lark-claude-bot",
+  "version": "1.0.0",
+  "description": "Lark bot that connects to Claude Code CLI via WebSocket long connection",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.42.0"
+  }
+}
