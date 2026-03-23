@@ -292,6 +292,13 @@ async function handleMessage(data) {
   const sessionLabel = state.sessionId ? '(continuing session)' : '(new session)';
   await reply(chatId, `🔄 Running in \`${state.workdir}\` ${sessionLabel}…`);
 
+  // Heartbeat: every 3 min notify user that the task is still running
+  const startTime = Date.now();
+  const heartbeat = setInterval(async () => {
+    const mins = Math.round((Date.now() - startTime) / 60000);
+    await reply(chatId, `⏳ Still working… (${mins} min elapsed)`);
+  }, 3 * 60 * 1000);
+
   try {
     const { result, sessionId: newSessionId } = await runClaude(text, state.workdir, state.sessionId);
 
@@ -320,6 +327,7 @@ async function handleMessage(data) {
       await reply(chatId, `❌ Error: ${err.message}`);
     }
   } finally {
+    clearInterval(heartbeat);
     state.running = false;
   }
   } catch (fatalErr) {
