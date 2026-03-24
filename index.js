@@ -2,6 +2,8 @@
 
 const lark = require('@larksuiteoapi/node-sdk');
 const { spawn } = require('child_process');
+const https = require('https');
+const os = require('os');
 const path = require('path');
 const fs = require('fs');
 
@@ -60,6 +62,61 @@ const apiClient = new lark.Client({
   domain: lark.Domain.Lark,
   loggerLevel: lark.LoggerLevel.warn,
 });
+
+// ── Lark tenant token (for media download) ────────────────────────────────────
+let _tenantToken = null;
+let _tenantTokenExp = 0;
+
+async function getTenantToken() {
+  if (_tenantToken && Date.now() < _tenantTokenExp) return _tenantToken;
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ app_id: APP_ID, app_secret: APP_SECRET });
+    const req = https.request({
+      hostname: 'open.larksuite.com',
+      path: '/open-apis/auth/v3/tenant_access_token/internal',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, (res) => {
+      let data = '';
+      res.on('data', c => (data += c));
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(data);
+          _tenantToken = j.tenant_access_token;
+          _tenantTokenExp = Date.now() + (j.expire - 300) * 1000;
+          resolve(_tenantToken);
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+// 从 Lark 下载图片，保存到临时文件，返回文件路径
+async function downloadLarkImage(messageId, imageKey) {
+  const token = await getTenantToken();
+  return new Promise((resolve, reject) => {
+    https.get({
+      hostname: 'open.larksuite.com',
+      path: `/open-apis/im/v1/messages/${messageId}/resources/${imageKey}?type=image`,
+      headers: { Authorization: `Bearer ${token}` },
+    }, (res) => {
+      if (res.statusCode !== 200) return reject(new Error(`Lark image HTTP ${res.statusCode}`));
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        const buf = Buffer.concat(chunks);
+        const ct = (res.headers['content-type'] || 'image/jpeg').split(';')[0].trim();
+        const ext = ct.includes('png') ? 'png' : ct.includes('gif') ? 'gif' : ct.includes('webp') ? 'webp' : 'jpg';
+        const tmpPath = path.join(os.tmpdir(), `lark_img_${Date.now()}.${ext}`);
+        fs.writeFileSync(tmpPath, buf);
+        resolve(tmpPath);
+      });
+    }).on('error', reject);
+  });
+}
 
 // ── Message deduplication ─────────────────────────────────────────────────────
 const processedMsgIds = new Set();
@@ -239,16 +296,68 @@ async function handleMessage(data) {
     console.log('[msg] chatId:', chatId, 'openId:', openId, 'type:', msg?.message_type, 'msgId:', msgId, 'age:', Math.round(age / 1000) + 's');
 
     if (!chatId || !openId) return;
-    if (msg.message_type !== 'text') {
-      await reply(chatId, '⚠️ Only text messages are supported.');
+
+    // ── 解析消息内容（文本 / 图片 / 富文本）────────────────────────────────────
+    let text = '';
+    const tmpFiles = []; // 临时图片文件，用完后删除
+    const msgType = msg.message_type;
+
+    if (msgType === 'text') {
+      try { text = JSON.parse(msg.content).text.trim(); } catch (_) {}
+      if (!text) return;
+
+    } else if (msgType === 'image') {
+      // 单张图片消息
+      let imageKey;
+      try { imageKey = JSON.parse(msg.content).image_key; } catch (_) {}
+      if (!imageKey) { await reply(chatId, '⚠️ 无法解析图片。'); return; }
+      try {
+        const imgPath = await downloadLarkImage(msgId, imageKey);
+        tmpFiles.push(imgPath);
+        text = `请分析这张图片（文件已保存到本地）: ${imgPath}`;
+      } catch (e) {
+        await reply(chatId, `❌ 图片下载失败: ${e.message}`);
+        return;
+      }
+
+    } else if (msgType === 'post') {
+      // 富文本（可能包含文字 + 多张图片）
+      let postContent;
+      try { postContent = JSON.parse(msg.content); } catch (_) {}
+      if (!postContent) { await reply(chatId, '⚠️ 无法解析富文本。'); return; }
+      const lang = postContent.zh_cn || postContent.en_us || Object.values(postContent)[0];
+      const textParts = [];
+      if (lang?.title) textParts.push(lang.title);
+      for (const line of (lang?.content || [])) {
+        for (const el of line) {
+          if (el.tag === 'text' && el.text) textParts.push(el.text);
+          else if (el.tag === 'img' && el.image_key) {
+            try {
+              const imgPath = await downloadLarkImage(msgId, el.image_key);
+              tmpFiles.push(imgPath);
+              textParts.push(`[图片已保存: ${imgPath}]`);
+            } catch (e) {
+              textParts.push(`[图片下载失败: ${e.message}]`);
+            }
+          }
+        }
+      }
+      text = textParts.join('\n').trim();
+      if (!text) return;
+
+    } else if (msgType === 'video' || msgType === 'file') {
+      await reply(chatId, `⚠️ 暂不支持 ${msgType} 类型消息，请发送文字或图片。`);
+      return;
+
+    } else {
+      await reply(chatId, `⚠️ 不支持的消息类型: ${msgType}`);
       return;
     }
 
-    const text = (() => {
-      try { return JSON.parse(msg.content).text.trim(); }
-      catch (_) { return ''; }
-    })();
-    if (!text) return;
+    // 临时文件 5 分钟后自动清理
+    if (tmpFiles.length > 0) {
+      setTimeout(() => { tmpFiles.forEach(f => { try { fs.unlinkSync(f); } catch (_) {} }); }, 5 * 60 * 1000);
+    }
 
     const state = getState(openId);
 
