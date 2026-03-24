@@ -195,6 +195,20 @@ function runClaude(prompt, workdir, sessionId, onEvent) {
   });
 }
 
+// ── Tool label formatter ──────────────────────────────────────────────────────
+function fmtTool(name, input = {}) {
+  if (name === 'Bash')    return `\`${(input.command || '').slice(0, 60)}\``;
+  if (name === 'Read')    return `Read \`${input.file_path || ''}\``;
+  if (name === 'Write')   return `Write \`${input.file_path || ''}\``;
+  if (name === 'Edit')    return `Edit \`${input.file_path || ''}\``;
+  if (name === 'Grep')    return `Grep \`${input.pattern || ''}\``;
+  if (name === 'Glob')    return `Glob \`${input.pattern || ''}\``;
+  if (name.startsWith('mcp__gcp__'))      return `☁️ GCP/${name.replace('mcp__gcp__gcp-', '')}`;
+  if (name.startsWith('mcp__newrelic__')) return `📊 NR/${name.replace('mcp__newrelic__', '')}`;
+  if (name.startsWith('mcp__'))           return `🔌 ${name.replace(/^mcp__[^_]+__/, '')}`;
+  return name;
+}
+
 // ── Message handler ───────────────────────────────────────────────────────────
 const HELP_TEXT = `🤖 Claude Code Bot
 
@@ -306,12 +320,20 @@ async function handleMessage(data) {
   const sessionLabel = state.sessionId ? '(continuing session)' : '(new session)';
   await reply(chatId, `🔄 Running in \`${state.workdir}\` ${sessionLabel}…`);
 
-  // Stream events: notify user on each tool call so they see progress in real time
+  // Stream events: send one throttled tool-use notification per 15s to avoid spam
+  let lastNotify = 0;
+  let toolCallCount = 0;
   const onEvent = (event) => {
     if (event.type === 'assistant' && Array.isArray(event.message?.content)) {
       for (const block of event.message.content) {
         if (block.type === 'tool_use') {
-          reply(chatId, `🔧 \`${block.name}\``).catch(() => {});
+          toolCallCount++;
+          const now = Date.now();
+          if (now - lastNotify >= 15_000) {
+            lastNotify = now;
+            const label = fmtTool(block.name, block.input);
+            reply(chatId, `🔧 ${label} (tool #${toolCallCount})`).catch(() => {});
+          }
         }
       }
     }
