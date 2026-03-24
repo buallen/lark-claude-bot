@@ -345,18 +345,80 @@ async function handleMessage(data) {
       text = textParts.join('\n').trim();
       if (!text) return;
 
-    } else if (msgType === 'video' || msgType === 'file') {
-      await reply(chatId, `⚠️ 暂不支持 ${msgType} 类型消息，请发送文字或图片。`);
+    } else if (msgType === 'merge_forward') {
+      // 转发的聊天记录
+      let content;
+      try { content = JSON.parse(msg.content); } catch (_) {}
+      const msgList = content?.merge_forward_content?.message_list || [];
+      if (msgList.length === 0) { await reply(chatId, '⚠️ 无法解析转发记录。'); return; }
+      const lines = [`[转发的聊天记录，共 ${msgList.length} 条]`];
+      for (const m of msgList) {
+        const from = m.from_name || m.from || '未知';
+        const ts = m.create_time ? new Date(Number(m.create_time) * 1000).toLocaleString('zh-CN') : '';
+        let body = '';
+        try {
+          const c = JSON.parse(m.message?.content || '{}');
+          if (c.text) body = c.text;
+          else if (c.image_key) body = '[图片]';
+          else body = m.message?.content?.slice(0, 200) || '';
+        } catch (_) { body = m.message?.content?.slice(0, 200) || ''; }
+        lines.push(`${from}${ts ? ` (${ts})` : ''}: ${body}`);
+      }
+      text = lines.join('\n');
+
+    } else if (msgType === 'interactive') {
+      // 互动卡片（含 Lark Task 任务、投票等）
+      let card;
+      try { card = JSON.parse(msg.content); } catch (_) {}
+      const parts = [];
+      // 提取标题
+      const title = card?.header?.title?.content || card?.header?.title?.text
+        || card?.card?.header?.title?.content || '';
+      if (title) parts.push(`标题: ${title}`);
+      // 递归提取文本节点
+      const extractText = (el) => {
+        if (!el || typeof el === 'string') return el || '';
+        if (el.content) return el.content;
+        if (el.text) return typeof el.text === 'string' ? el.text : (el.text?.content || '');
+        if (Array.isArray(el.elements)) return el.elements.map(extractText).filter(Boolean).join(' ');
+        if (Array.isArray(el.fields)) return el.fields.map(f => extractText(f.text)).filter(Boolean).join(', ');
+        return '';
+      };
+      const elements = card?.elements || card?.body?.elements || card?.card?.elements || [];
+      for (const el of elements) {
+        const t = extractText(el).trim();
+        if (t) parts.push(t);
+      }
+      text = parts.length > 0
+        ? `[Lark 卡片消息]\n${parts.join('\n')}`
+        : `[Lark 卡片消息（原始 JSON）]\n${JSON.stringify(card).slice(0, 1000)}`;
+
+    } else if (msgType === 'file' || msgType === 'audio') {
+      // 文件/音频：提示不支持，但告知文件信息
+      let info = '';
+      try { const c = JSON.parse(msg.content); info = c.file_name || c.file_key || ''; } catch (_) {}
+      await reply(chatId, `⚠️ 暂不支持 ${msgType} 消息${info ? `（${info}）` : ''}，请发送文字或图片。`);
+      return;
+
+    } else if (msgType === 'video') {
+      await reply(chatId, '⚠️ 暂不支持视频消息，请截图后发送图片。');
       return;
 
     } else {
-      await reply(chatId, `⚠️ 不支持的消息类型: ${msgType}`);
+      // 未知类型：记录原始内容，方便调试
+      console.log('[msg] unknown type:', msgType, 'content:', msg.content?.slice(0, 300));
+      await reply(chatId, `⚠️ 暂不支持的消息类型: ${msgType}`);
       return;
     }
 
     // 临时文件 5 分钟后自动清理
     if (tmpFiles.length > 0) {
       setTimeout(() => { tmpFiles.forEach(f => { try { fs.unlinkSync(f); } catch (_) {} }); }, 5 * 60 * 1000);
+    }
+
+    // Thread 话题：在 prompt 前加上话题标识，帮助 Claude 理解上下文
+    if (msg.thread_id && msg.parent_id) {
+      text = `[话题回复 thread_id=${msg.thread_id}]\n${text}`;
     }
 
     const state = getState(openId);
