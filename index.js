@@ -161,7 +161,8 @@ function runClaude(prompt, workdir, sessionId) {
 
     let stdout = '';
     let stderr = '';
-    const proc = spawn(NVM_NODE, args, { cwd: workdir, env });
+    // stdio: ['ignore', 'pipe', 'pipe'] — 将 stdin 重定向到 /dev/null，避免 3 秒等待
+    const proc = spawn(NVM_NODE, args, { cwd: workdir, env, stdio: ['ignore', 'pipe', 'pipe'] });
 
     proc.stdout.on('data', d => { stdout += d.toString(); });
     proc.stderr.on('data', d => { stderr += d.toString(); });
@@ -173,10 +174,12 @@ function runClaude(prompt, workdir, sessionId) {
 
     proc.on('close', code => {
       clearTimeout(timer);
-      const result = stdout.trim() || stderr.trim();
-      if (result) resolve(result);
-      else if (code === 0) resolve('✅ Done (no output)');
-      else reject(new Error(`Claude exited with code ${code}\n${stderr.trim()}`));
+      if (code === 0) {
+        resolve(stdout.trim() || '✅ Done (no output)');
+      } else {
+        // 非 0 退出码一律 reject，触发上层错误处理（如 session 过期重试）
+        reject(new Error(stderr.trim() || stdout.trim() || `Claude exited with code ${code}`));
+      }
     });
 
     proc.on('error', err => { clearTimeout(timer); reject(err); });
