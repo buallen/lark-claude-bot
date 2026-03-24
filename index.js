@@ -181,10 +181,20 @@ function findNewSessionId(workdir, afterMs) {
 }
 
 // ── Lark message helpers ──────────────────────────────────────────────────────
+// lark_md 不支持 > 引用块，预处理转成可视化的竖线前缀
+function preprocessMarkdown(md) {
+  return md.split('\n').map(line => {
+    const m = line.match(/^(>+)\s*(.*)/);
+    if (!m) return line;
+    return '**│** ' + m[2]; // 引用 → 加粗竖线 + 内容
+  }).join('\n');
+}
+
 // 使用 interactive card + lark_md，Lark 原生渲染 markdown（支持加粗/斜体/代码块/列表等）
 async function reply(chatId, markdown) {
+  const processed = preprocessMarkdown(markdown);
   // 按行分组，每组不超过 3000 字符，避免超出单个 card element 限制
-  const lines = markdown.split('\n');
+  const lines = processed.split('\n');
   const groups = [];
   let cur = [], curLen = 0;
   for (const line of lines) {
@@ -448,6 +458,38 @@ async function handleMessage(data) {
 
     // ── Built-in commands ────────────────────────────────────────────────────
     if (text === 'help') { await reply(chatId, HELP_TEXT); return; }
+
+    if (text === 'test') {
+      await reply(chatId, `# 标题 H1
+## 标题 H2
+
+普通文本，**加粗**，*斜体*，~~删除线~~，\`内联代码\`
+
+> 这是引用块
+> 多行引用
+
+- 无序列表项 1
+- 无序列表项 2
+  - 嵌套项
+
+1. 有序列表 1
+2. 有序列表 2
+
+[点击链接](https://www.google.com)
+
+\`\`\`javascript
+const hello = "world";
+console.log(hello);
+\`\`\`
+
+---
+
+表格（如果支持）:
+| 列1 | 列2 |
+|-----|-----|
+| A   | B   |`);
+      return;
+    }
 
     if (text === 'pwd') {
       await reply(chatId, `📁 Directory: \`${state.workdir}\`\n🔗 Session: \`${state.sessionId || 'none'}\``);
