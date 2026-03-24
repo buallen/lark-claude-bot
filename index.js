@@ -190,9 +190,9 @@ function preprocessForLarkMarkdown(md) {
     // 标题 → 加粗
     const hm = line.match(/^#{1,3}\s+(.+)/);
     if (hm) return `**${hm[1]}**`;
-    // 引用块 → │ 前缀
+    // 引用块 → 加粗竖线 + 斜体内容
     const bqm = line.match(/^>+\s*(.*)/);
-    if (bqm) return `**│** ${bqm[1]}`;
+    if (bqm) return bqm[1] ? `**│** *${bqm[1]}*` : '**│**';
     return line;
   }).join('\n');
 }
