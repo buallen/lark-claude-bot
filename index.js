@@ -535,9 +535,17 @@ console.log(hello);
     const sessionLabel = state.sessionId ? '(continuing session)' : '(new session)';
     await reply(chatId, `🔄 Running in \`${state.workdir}\` ${sessionLabel}…`);
 
+    // 在用户 prompt 前注入格式说明，使输出适配 Lark 消息渲染
+    const LARK_FORMAT_HINT = `[系统提示：你的回复将展示在 Lark 消息中，请遵守以下格式规则：
+- 不要使用 # 标题语法，改用 emoji + **加粗** 作为章节标题（如 🔍 **问题分析**）
+- 代码块正常使用 \`\`\`lang，Lark 支持
+- 列表、加粗、斜体、链接正常使用
+- 不要输出过长的纯文字段落，适当分段
+以下是用户的请求：]\n`;
+
     try {
       const startMs = Date.now();
-      const result = await runClaude(text, state.workdir, state.sessionId);
+      const result = await runClaude(LARK_FORMAT_HINT + text, state.workdir, state.sessionId);
 
       // 首次运行后找到新建的 session 文件
       if (!state.sessionId) {
