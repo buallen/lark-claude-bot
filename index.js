@@ -197,40 +197,20 @@ function preprocessForLarkMarkdown(md) {
   }).join('\n');
 }
 
-// 使用 interactive card 发送，正确的元素 tag 是 "markdown"
+// 发送新 interactive card 消息
 async function reply(chatId, markdown) {
-  const processed = preprocessForLarkMarkdown(markdown);
-  // 按行分组，每组不超过 3000 字符
-  const lines = processed.split('\n');
-  const elements = [];
-  let cur = [], curLen = 0;
-  for (const line of lines) {
-    if (curLen + line.length + 1 > 3000 && cur.length > 0) {
-      elements.push({ tag: 'markdown', content: cur.join('\n') });
-      cur = []; curLen = 0;
-    }
-    cur.push(line);
-    curLen += line.length + 1;
-  }
-  if (cur.length > 0) elements.push({ tag: 'markdown', content: cur.join('\n') });
-
-  const card = {
-    config: { wide_screen_mode: true },
-    elements,
-  };
-
   try {
     const res = await apiClient.im.message.create({
       params: { receive_id_type: 'chat_id' },
       data: {
         receive_id: chatId,
-        content: JSON.stringify(card),
+        content: makeCardContent(markdown),
         msg_type: 'interactive',
       },
     });
-    if (res.code !== 0) console.error('[reply error] code:', res.code, 'msg:', res.msg);
+    if (res.code !== 0) console.error('[reply error] code:', res.code, 'msg:', res.msg, JSON.stringify(res).slice(0, 300));
   } catch (e) {
-    console.error('[reply exception]', e.message);
+    console.error('[reply exception]', e.message, e.response?.data ? JSON.stringify(e.response.data).slice(0, 300) : '');
   }
 }
 
@@ -281,37 +261,47 @@ function runClaude(prompt, workdir, sessionId, onProgress = null) {
   });
 }
 
-// 更新已发出的 Lark text 消息内容（用于流式显示）
-async function patchTextMessage(messageId, text) {
+// 将 markdown 内容打包成 interactive card JSON 字符串
+function makeCardContent(markdownText) {
+  const processed = preprocessForLarkMarkdown(markdownText);
+  const lines = processed.split('\n');
+  const elements = [];
+  let cur = [], curLen = 0;
+  for (const line of lines) {
+    if (curLen + line.length + 1 > 3000 && cur.length > 0) {
+      elements.push({ tag: 'markdown', content: cur.join('\n') });
+      cur = []; curLen = 0;
+    }
+    cur.push(line);
+    curLen += line.length + 1;
+  }
+  if (cur.length > 0) elements.push({ tag: 'markdown', content: cur.join('\n') });
+  return JSON.stringify({ config: { wide_screen_mode: true }, elements });
+}
+
+// patch 已有的 interactive card（流式更新 + 最终结果复用同一条消息）
+async function patchCard(messageId, markdownText) {
   try {
     const res = await apiClient.im.message.patch({
       path: { message_id: messageId },
-      data: { content: JSON.stringify({ text }) },
+      data: { content: makeCardContent(markdownText) },
     });
     if (res.code !== 0) console.error('[patch error]', res.code, res.msg);
+    else console.log('[patch ok] msgId:', messageId, 'len:', markdownText.length);
   } catch (e) {
-    console.error('[patch exception]', e.message);
+    console.error('[patch exception]', e.message, e.response?.data ? JSON.stringify(e.response.data).slice(0, 200) : '');
   }
 }
 
-// 删除消息（用于删除流式占位消息）
-async function deleteLarkMessage(messageId) {
-  try {
-    await apiClient.im.message.delete({ path: { message_id: messageId } });
-  } catch (e) {
-    console.error('[delete exception]', e.message);
-  }
-}
-
-// 发送文字占位消息并返回 message_id（用于流式更新）
-async function sendStreamingPlaceholder(chatId, text) {
+// 发送 interactive card 占位消息，返回 message_id
+async function sendCardPlaceholder(chatId, text) {
   try {
     const res = await apiClient.im.message.create({
       params: { receive_id_type: 'chat_id' },
       data: {
         receive_id: chatId,
-        content: JSON.stringify({ text }),
-        msg_type: 'text',
+        content: makeCardContent(text),
+        msg_type: 'interactive',
       },
     });
     return res.data?.message_id || null;
@@ -585,16 +575,15 @@ console.log(hello);
 - 不要输出过长的纯文字段落，适当分段
 以下是用户的请求：]\n`;
 
-    // 流式显示：发占位消息，每 2s 更新一次
-    const streamMsgId = await sendStreamingPlaceholder(chatId, '⏳ 生成中...');
+    // 流式显示：发 interactive card 占位，每 2s patch 更新，完成后 patch 成最终内容
+    const streamMsgId = await sendCardPlaceholder(chatId, '⏳ 生成中...');
     let lastPatch = 0;
     const onProgress = (fullText) => {
       const now = Date.now();
       if (!streamMsgId || now - lastPatch < 2000) return;
       lastPatch = now;
-      // 只显示末尾 1500 字符，避免超长
       const preview = fullText.length > 1500 ? '…' + fullText.slice(-1500) : fullText;
-      patchTextMessage(streamMsgId, preview + ' ▌').catch(() => {});
+      patchCard(streamMsgId, preview + ' ▌').catch(() => {});
     };
 
     const runWithStreaming = async (prompt, sessionId) => {
@@ -610,26 +599,25 @@ console.log(hello);
     try {
       const result = await runWithStreaming(LARK_FORMAT_HINT + text, state.sessionId);
       saveState();
-      // 删掉流式占位，发最终格式化 card
-      if (streamMsgId) await deleteLarkMessage(streamMsgId);
-      await reply(chatId, result);
+      // 直接 patch 成最终格式化内容（复用同一条消息，无需删除）
+      if (streamMsgId) await patchCard(streamMsgId, result);
+      else await reply(chatId, result);
     } catch (err) {
-      // session 过期则重试
       if (state.sessionId && err.message.includes('No conversation found')) {
         console.log(`[${openId}] Session expired, retrying fresh`);
         state.sessionId = null;
         try {
           const result = await runWithStreaming(LARK_FORMAT_HINT + text, null);
           saveState();
-          if (streamMsgId) await deleteLarkMessage(streamMsgId);
-          await reply(chatId, result);
+          if (streamMsgId) await patchCard(streamMsgId, result);
+          else await reply(chatId, result);
         } catch (err2) {
-          if (streamMsgId) await deleteLarkMessage(streamMsgId);
-          await reply(chatId, `❌ Error: ${err2.message}`);
+          if (streamMsgId) await patchCard(streamMsgId, `❌ Error: ${err2.message}`);
+          else await reply(chatId, `❌ Error: ${err2.message}`);
         }
       } else {
-        if (streamMsgId) await deleteLarkMessage(streamMsgId);
-        await reply(chatId, `❌ Error: ${err.message}`);
+        if (streamMsgId) await patchCard(streamMsgId, `❌ Error: ${err.message}`);
+        else await reply(chatId, `❌ Error: ${err.message}`);
       }
     } finally {
       state.running = false;
