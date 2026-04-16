@@ -1,7 +1,7 @@
 {
-  "name": "lark-claude-bot",
+  "name": "lark-bridge",
   "version": "1.0.0",
-  "description": "Lark bot that connects to Claude Code CLI via WebSocket long connection",
+  "description": "Generic Lark messaging bridge — auto-reply via Claude or send-only HTTP API for any app",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"

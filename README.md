@@ -1,6 +1,6 @@
-# lark-claude-bot
+# lark-bridge
 
-A Lark (Feishu) bot that connects to Claude Code CLI. Supports two modes:
+A generic Lark (Feishu) messaging bridge. Supports two modes:
 
 - **Auto-reply mode** — responds to incoming Lark DMs and group mentions by running Claude
 - **Send-only mode** — disables the WS listener; exposes an HTTP API so other apps can send messages to Lark through this bot
