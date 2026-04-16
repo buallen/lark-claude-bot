@@ -1,4 +1,7 @@
 node_modules/
 *.log
+*.bak
 .env
 .state.json
+.dedup.json
+.bot.pid

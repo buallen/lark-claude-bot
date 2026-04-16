@@ -1,0 +1,19 @@
+#!/bin/bash
+# Restart the Lark Claude bot via LaunchAgent (prevents duplicate instances)
+# Usage: ./restart.sh
+set -e
+
+LABEL="com.kanlu.lark-claude-bot"
+UID_VAL=$(id -u)
+
+echo "Restarting $LABEL..."
+# kickstart -k kills existing instance first, then starts fresh
+launchctl kickstart -k "gui/$UID_VAL/$LABEL" 2>/dev/null || {
+  # If kickstart fails (service not loaded), try bootout+bootstrap
+  launchctl bootout "gui/$UID_VAL/$LABEL" 2>/dev/null || true
+  sleep 1
+  launchctl bootstrap "gui/$UID_VAL" ~/Library/LaunchAgents/$LABEL.plist
+}
+sleep 2
+echo "Bot restarted. Tailing log (Ctrl+C to stop):"
+tail -f ~/Library/Logs/lark-claude-bot.log
